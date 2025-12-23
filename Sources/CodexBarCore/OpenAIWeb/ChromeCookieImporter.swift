@@ -51,28 +51,37 @@ enum ChromeCookieImporter {
         try self.loadCookiesFromAllProfiles(matchingDomains: ["chatgpt.com", "openai.com"])
     }
 
-    /// Loads cookies from all Chrome profiles matching the given domains.
+    /// Loads cookies from all Chrome and Chromium-based browser profiles matching the given domains.
     /// - Parameter matchingDomains: Array of domain patterns to match (e.g., ["claude.ai"])
     /// - Returns: Array of cookie sources with matching records
     static func loadCookiesFromAllProfiles(matchingDomains domains: [String]) throws -> [CookieSource] {
-        let roots = self.candidateHomes().map { home in
-            home.appendingPathComponent("Library")
-                .appendingPathComponent("Application Support")
-                .appendingPathComponent("Google")
-                .appendingPathComponent("Chrome")
+        // Support multiple Chromium-based browsers
+        let browserPaths: [(name: String, path: String)] = [
+            ("Chrome", "Google/Chrome"),
+            ("Brave", "BraveSoftware/Brave-Browser"),
+            ("Edge", "Microsoft Edge"),
+            ("Vivaldi", "Vivaldi"),
+        ]
+
+        let homes = self.candidateHomes()
+        var allCandidates: [ChromeProfileCandidate] = []
+
+        for home in homes {
+            let appSupport = home.appendingPathComponent("Library").appendingPathComponent("Application Support")
+            for (browserName, browserPath) in browserPaths {
+                let root = appSupport.appendingPathComponent(browserPath)
+                let candidates = Self.chromeProfileCookieDBs(root: root, browserName: browserName)
+                allCandidates.append(contentsOf: candidates)
+            }
         }
 
-        var candidates: [ChromeProfileCandidate] = []
-        for root in roots {
-            candidates.append(contentsOf: Self.chromeProfileCookieDBs(root: root))
-        }
-        if candidates.isEmpty {
-            let display = roots.map(\.path).joined(separator: " • ")
-            throw ImportError.cookieDBNotFound(path: display)
+        if allCandidates.isEmpty {
+            let searchPaths = browserPaths.map { $0.path }.joined(separator: ", ")
+            throw ImportError.cookieDBNotFound(path: "~/Library/Application Support/{\(searchPaths)}")
         }
 
         let chromeKey = try Self.chromeSafeStorageKey()
-        return try candidates.compactMap { candidate in
+        return try allCandidates.compactMap { candidate in
             guard FileManager.default.fileExists(atPath: candidate.cookiesDB.path) else { return nil }
             let records = try Self.readCookiesFromLockedChromeDB(
                 sourceDB: candidate.cookiesDB,
@@ -384,7 +393,7 @@ enum ChromeCookieImporter {
         let cookiesDB: URL
     }
 
-    private static func chromeProfileCookieDBs(root: URL) -> [ChromeProfileCandidate] {
+    private static func chromeProfileCookieDBs(root: URL, browserName: String = "Chrome") -> [ChromeProfileCandidate] {
         // Common profile directories: "Default", "Profile 1", ..., plus possible custom profile dirs.
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: root,
@@ -403,7 +412,7 @@ enum ChromeCookieImporter {
 
         return profileDirs.map { dir in
             ChromeProfileCandidate(
-                label: "Chrome \(dir.lastPathComponent)",
+                label: "\(browserName) \(dir.lastPathComponent)",
                 cookiesDB: dir.appendingPathComponent("Cookies"))
         }
     }

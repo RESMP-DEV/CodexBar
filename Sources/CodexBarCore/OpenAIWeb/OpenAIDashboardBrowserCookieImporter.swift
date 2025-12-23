@@ -82,11 +82,28 @@ public struct OpenAIDashboardBrowserCookieImporter {
 
         var diagnostics = ImportDiagnostics()
 
-        if let match = await self.trySafari(targetEmail: targetEmail, log: log, diagnostics: &diagnostics) {
-            return match
-        }
-        if let match = await self.tryChrome(targetEmail: targetEmail, log: log, diagnostics: &diagnostics) {
-            return match
+        // Use intelligent browser detection to prioritize browsers
+        let domains = ["chatgpt.com", "openai.com"]
+        let prioritizedBrowsers = BrowserDetector.prioritizeBrowsers(forDomains: domains)
+        log("Browser priority: \(prioritizedBrowsers.map(\.rawValue).joined(separator: " → "))")
+
+        for browser in prioritizedBrowsers {
+            let match: ImportResult?
+            switch browser {
+            case .safari:
+                match = await self.trySafari(targetEmail: targetEmail, log: log, diagnostics: &diagnostics)
+            case .chrome, .brave, .edge, .vivaldi:
+                match = await self.tryChromium(
+                    browser: browser,
+                    targetEmail: targetEmail,
+                    log: log,
+                    diagnostics: &diagnostics)
+            default:
+                continue
+            }
+            if let match {
+                return match
+            }
         }
 
         if !diagnostics.mismatches.isEmpty {
@@ -148,18 +165,21 @@ public struct OpenAIDashboardBrowserCookieImporter {
         }
     }
 
-    private func tryChrome(
+    private func tryChromium(
+        browser: BrowserDetector.Browser,
         targetEmail: String,
         log: @escaping (String) -> Void,
         diagnostics: inout ImportDiagnostics) async -> ImportResult?
     {
-        // Chrome fallback: may trigger Keychain prompt. Only do this if Safari didn't match.
+        // Chromium-based browsers may trigger Keychain prompt for decryption key.
         do {
             let chromeSources = try ChromeCookieImporter.loadChatGPTCookiesFromAllProfiles()
-            for source in chromeSources {
+            // Filter sources to match the requested browser
+            let browserName = browser.rawValue
+            for source in chromeSources where source.label.contains(browserName) || browserName == "Chrome" {
                 let cookies = ChromeCookieImporter.makeHTTPCookies(source.records)
                 if cookies.isEmpty {
-                    log("Chrome source \(source.label) produced 0 HTTPCookies.")
+                    log("\(browserName) source \(source.label) produced 0 HTTPCookies.")
                     continue
                 }
                 diagnostics.foundAnyCookies = true
@@ -177,12 +197,12 @@ public struct OpenAIDashboardBrowserCookieImporter {
             return nil
         } catch let error as ChromeCookieImporter.ImportError {
             if case .keychainDenied = error {
-                diagnostics.accessDeniedHints.append("Chrome Safe Storage denied in Keychain.")
+                diagnostics.accessDeniedHints.append("\(browser.rawValue) Safe Storage denied in Keychain.")
             }
-            log("Chrome cookie load failed: \(error.localizedDescription)")
+            log("\(browser.rawValue) cookie load failed: \(error.localizedDescription)")
             return nil
         } catch {
-            log("Chrome cookie load failed: \(error.localizedDescription)")
+            log("\(browser.rawValue) cookie load failed: \(error.localizedDescription)")
             return nil
         }
     }
