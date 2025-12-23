@@ -3,17 +3,18 @@ import Foundation
 import Security
 import SQLite3
 
-/// Reads ChatGPT/OpenAI cookies from a local Chromium cookie DB (Google Chrome by default).
+/// Reads ChatGPT/OpenAI cookies from Chromium-based browsers (Chrome, Brave, Edge, Vivaldi).
 ///
 /// Purpose: optional "no password" bootstrap for the OpenAI dashboard scrape by reusing the user's existing
-/// signed-in Chrome session (similar to how `~/Projects/oracle` syncs cookies).
+/// signed-in browser session (similar to how `~/Projects/oracle` syncs cookies).
 ///
 /// Notes:
-/// - Chrome stores cookie values in an SQLite DB, and most values are encrypted (`encrypted_value` starts
+/// - Chromium browsers store cookie values in an SQLite DB, and most values are encrypted (`encrypted_value` starts
 ///   with `v10` on macOS). Decryption uses the "Chrome Safe Storage" password from the macOS Keychain and
 ///   AES-CBC + PBKDF2. This is inherently brittle across Chrome encryption changes; keep it best-effort.
 /// - We never persist the imported cookies ourselves. We only inject them into WebKit's `WKWebsiteDataStore`
 ///   cookie jar for the chosen CodexBar dashboard account.
+/// - As of this implementation, supports Google Chrome, Brave, Microsoft Edge, and Vivaldi browsers.
 enum ChromeCookieImporter {
     private static let chromeSafeStorageKeyLock = NSLock()
     private nonisolated(unsafe) static var cachedChromeSafeStorageKey: Data?
@@ -51,28 +52,37 @@ enum ChromeCookieImporter {
         try self.loadCookiesFromAllProfiles(matchingDomains: ["chatgpt.com", "openai.com"])
     }
 
-    /// Loads cookies from all Chrome profiles matching the given domains.
+    /// Loads cookies from all Chrome and Chromium-based browser profiles matching the given domains.
     /// - Parameter matchingDomains: Array of domain patterns to match (e.g., ["claude.ai"])
     /// - Returns: Array of cookie sources with matching records
     static func loadCookiesFromAllProfiles(matchingDomains domains: [String]) throws -> [CookieSource] {
-        let roots = self.candidateHomes().map { home in
-            home.appendingPathComponent("Library")
-                .appendingPathComponent("Application Support")
-                .appendingPathComponent("Google")
-                .appendingPathComponent("Chrome")
+        // Support multiple Chromium-based browsers
+        let browserPaths: [(name: String, path: String)] = [
+            ("Chrome", "Google/Chrome"),
+            ("Brave", "BraveSoftware/Brave-Browser"),
+            ("Edge", "Microsoft Edge"),
+            ("Vivaldi", "Vivaldi"),
+        ]
+
+        let homes = self.candidateHomes()
+        var allCandidates: [ChromeProfileCandidate] = []
+
+        for home in homes {
+            let appSupport = home.appendingPathComponent("Library").appendingPathComponent("Application Support")
+            for (browserName, browserPath) in browserPaths {
+                let root = appSupport.appendingPathComponent(browserPath)
+                let candidates = Self.chromeProfileCookieDBs(root: root, browserName: browserName)
+                allCandidates.append(contentsOf: candidates)
+            }
         }
 
-        var candidates: [ChromeProfileCandidate] = []
-        for root in roots {
-            candidates.append(contentsOf: Self.chromeProfileCookieDBs(root: root))
-        }
-        if candidates.isEmpty {
-            let display = roots.map(\.path).joined(separator: " • ")
-            throw ImportError.cookieDBNotFound(path: display)
+        if allCandidates.isEmpty {
+            let searchPaths = browserPaths.map { $0.path }.joined(separator: ", ")
+            throw ImportError.cookieDBNotFound(path: "~/Library/Application Support/{\(searchPaths)}")
         }
 
         let chromeKey = try Self.chromeSafeStorageKey()
-        return try candidates.compactMap { candidate in
+        return try allCandidates.compactMap { candidate in
             guard FileManager.default.fileExists(atPath: candidate.cookiesDB.path) else { return nil }
             let records = try Self.readCookiesFromLockedChromeDB(
                 sourceDB: candidate.cookiesDB,
@@ -135,12 +145,12 @@ enum ChromeCookieImporter {
         }
         defer { sqlite3_close(db) }
 
-        // Build WHERE clause dynamically for the given domains
-        let conditions = matchingDomains.map { "host_key LIKE '%\($0)%'" }.joined(separator: " OR ")
+        // Build WHERE clause with placeholders for parameterized query
+        let placeholders = matchingDomains.map { _ in "host_key LIKE ?" }.joined(separator: " OR ")
         let sql = """
         SELECT host_key, name, path, expires_utc, is_secure, is_httponly, value, encrypted_value
         FROM cookies
-        WHERE \(conditions)
+        WHERE \(placeholders)
         """
 
         var stmt: OpaquePointer?
@@ -148,6 +158,14 @@ enum ChromeCookieImporter {
             throw ImportError.sqliteFailed(message: String(cString: sqlite3_errmsg(db)))
         }
         defer { sqlite3_finalize(stmt) }
+
+        // Bind parameters for each domain (SQLite uses 1-based indexing)
+        for (index, domain) in matchingDomains.enumerated() {
+            let pattern = "%\(domain)%"
+            if sqlite3_bind_text(stmt, Int32(index + 1), pattern, -1, nil) != SQLITE_OK {
+                throw ImportError.sqliteFailed(message: "Failed to bind parameter")
+            }
+        }
 
         var out: [CookieRecord] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
@@ -384,7 +402,7 @@ enum ChromeCookieImporter {
         let cookiesDB: URL
     }
 
-    private static func chromeProfileCookieDBs(root: URL) -> [ChromeProfileCandidate] {
+    private static func chromeProfileCookieDBs(root: URL, browserName: String = "Chrome") -> [ChromeProfileCandidate] {
         // Common profile directories: "Default", "Profile 1", ..., plus possible custom profile dirs.
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: root,
@@ -403,7 +421,7 @@ enum ChromeCookieImporter {
 
         return profileDirs.map { dir in
             ChromeProfileCandidate(
-                label: "Chrome \(dir.lastPathComponent)",
+                label: "\(browserName) \(dir.lastPathComponent)",
                 cookiesDB: dir.appendingPathComponent("Cookies"))
         }
     }

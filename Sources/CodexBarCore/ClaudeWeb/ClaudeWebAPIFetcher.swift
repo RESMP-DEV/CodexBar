@@ -111,35 +111,55 @@ public enum ClaudeWebAPIFetcher {
     private static func extractSessionKey(logger: ((String) -> Void)? = nil) throws -> String {
         let log: (String) -> Void = { msg in logger?(msg) }
 
-        // Try Safari first (doesn't require Keychain access)
-        do {
-            let safariRecords = try SafariCookieImporter.loadCookies(
-                matchingDomains: ["claude.ai"],
-                logger: log)
-            if let sessionKey = findSessionKey(in: safariRecords.map { record in
-                (name: record.name, value: record.value)
-            }) {
-                log("Found sessionKey in Safari")
-                return sessionKey
-            }
-        } catch {
-            log("Safari cookie load failed: \(error.localizedDescription)")
-        }
+        // Use intelligent browser detection to prioritize browsers
+        let domains = ["claude.ai"]
+        let prioritizedBrowsers = BrowserDetector.prioritizeBrowsers(forDomains: domains)
+        log("Browser priority for Claude: \(prioritizedBrowsers.map(\.rawValue).joined(separator: " → "))")
 
-        // Try Chrome (may trigger Keychain prompt)
-        do {
-            let chromeSources = try ChromeCookieImporter.loadCookiesFromAllProfiles(
-                matchingDomains: ["claude.ai"])
-            for source in chromeSources {
-                if let sessionKey = findSessionKey(in: source.records.map { record in
-                    (name: record.name, value: record.value)
-                }) {
-                    log("Found sessionKey in \(source.label)")
-                    return sessionKey
+        for browser in prioritizedBrowsers {
+            do {
+                switch browser {
+                case .safari:
+                    let safariRecords = try SafariCookieImporter.loadCookies(
+                        matchingDomains: domains,
+                        logger: log)
+                    if let sessionKey = findSessionKey(in: safariRecords.map { record in
+                        (name: record.name, value: record.value)
+                    }) {
+                        log("Found sessionKey in Safari")
+                        return sessionKey
+                    }
+
+                case .chrome, .brave, .edge, .vivaldi:
+                    let chromeSources = try ChromeCookieImporter.loadCookiesFromAllProfiles(
+                        matchingDomains: domains)
+                    for source in chromeSources where source.label.contains(browser.rawValue) || browser == .chrome {
+                        if let sessionKey = findSessionKey(in: source.records.map { record in
+                            (name: record.name, value: record.value)
+                        }) {
+                            log("Found sessionKey in \(source.label)")
+                            return sessionKey
+                        }
+                    }
+
+                case .firefox, .firefoxDeveloperEdition:
+                    let firefoxSources = try FirefoxCookieImporter.loadCookiesFromAllProfiles(
+                        matchingDomains: domains)
+                    for source in firefoxSources where source.label.contains(browser.rawValue) {
+                        if let sessionKey = findSessionKey(in: source.records.map { record in
+                            (name: record.name, value: record.value)
+                        }) {
+                            log("Found sessionKey in \(source.label)")
+                            return sessionKey
+                        }
+                    }
+
+                default:
+                    continue
                 }
+            } catch {
+                log("\(browser.rawValue) cookie load failed: \(error.localizedDescription)")
             }
-        } catch {
-            log("Chrome cookie load failed: \(error.localizedDescription)")
         }
 
         throw FetchError.noSessionKeyFound

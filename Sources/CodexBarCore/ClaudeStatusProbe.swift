@@ -1,5 +1,5 @@
 import Foundation
-import os.log
+import OSLog
 
 public struct ClaudeStatusSnapshot: Sendable {
     public let sessionPercentLeft: Int?
