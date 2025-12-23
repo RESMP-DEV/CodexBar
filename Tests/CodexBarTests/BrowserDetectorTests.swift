@@ -80,9 +80,12 @@ struct BrowserDetectorTests {
         #expect(BrowserDetector.Browser.brave.supportsCookieExtraction)
         #expect(BrowserDetector.Browser.edge.supportsCookieExtraction)
         #expect(BrowserDetector.Browser.vivaldi.supportsCookieExtraction)
+        
+        // Firefox browsers should be supported
+        #expect(BrowserDetector.Browser.firefox.supportsCookieExtraction)
+        #expect(BrowserDetector.Browser.firefoxDeveloperEdition.supportsCookieExtraction)
 
-        // Firefox and Arc are not yet supported
-        #expect(!BrowserDetector.Browser.firefox.supportsCookieExtraction)
+        // Arc is not yet supported
         #expect(!BrowserDetector.Browser.arc.supportsCookieExtraction)
     }
 
@@ -93,5 +96,7 @@ struct BrowserDetectorTests {
         #expect(BrowserDetector.Browser.brave.bundleIdentifier == "com.brave.Browser")
         #expect(BrowserDetector.Browser.edge.bundleIdentifier == "com.microsoft.edgemac")
         #expect(BrowserDetector.Browser.arc.bundleIdentifier == "company.thebrowser.Browser")
+        #expect(BrowserDetector.Browser.firefox.bundleIdentifier == "org.mozilla.firefox")
+        #expect(BrowserDetector.Browser.firefoxDeveloperEdition.bundleIdentifier == "org.mozilla.firefoxdeveloperedition")
     }
 }

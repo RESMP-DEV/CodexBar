@@ -3,17 +3,18 @@ import Foundation
 import Security
 import SQLite3
 
-/// Reads ChatGPT/OpenAI cookies from a local Chromium cookie DB (Google Chrome by default).
+/// Reads ChatGPT/OpenAI cookies from Chromium-based browsers (Chrome, Brave, Edge, Vivaldi).
 ///
 /// Purpose: optional "no password" bootstrap for the OpenAI dashboard scrape by reusing the user's existing
-/// signed-in Chrome session (similar to how `~/Projects/oracle` syncs cookies).
+/// signed-in browser session (similar to how `~/Projects/oracle` syncs cookies).
 ///
 /// Notes:
-/// - Chrome stores cookie values in an SQLite DB, and most values are encrypted (`encrypted_value` starts
+/// - Chromium browsers store cookie values in an SQLite DB, and most values are encrypted (`encrypted_value` starts
 ///   with `v10` on macOS). Decryption uses the "Chrome Safe Storage" password from the macOS Keychain and
 ///   AES-CBC + PBKDF2. This is inherently brittle across Chrome encryption changes; keep it best-effort.
 /// - We never persist the imported cookies ourselves. We only inject them into WebKit's `WKWebsiteDataStore`
 ///   cookie jar for the chosen CodexBar dashboard account.
+/// - As of this implementation, supports Google Chrome, Brave, Microsoft Edge, and Vivaldi browsers.
 enum ChromeCookieImporter {
     private static let chromeSafeStorageKeyLock = NSLock()
     private nonisolated(unsafe) static var cachedChromeSafeStorageKey: Data?

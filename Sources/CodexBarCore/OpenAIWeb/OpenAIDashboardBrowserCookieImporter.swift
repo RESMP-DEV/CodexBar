@@ -98,6 +98,12 @@ public struct OpenAIDashboardBrowserCookieImporter {
                     targetEmail: targetEmail,
                     log: log,
                     diagnostics: &diagnostics)
+            case .firefox, .firefoxDeveloperEdition:
+                match = await self.tryFirefox(
+                    browser: browser,
+                    targetEmail: targetEmail,
+                    log: log,
+                    diagnostics: &diagnostics)
             default:
                 continue
             }
@@ -199,6 +205,46 @@ public struct OpenAIDashboardBrowserCookieImporter {
             if case .keychainDenied = error {
                 diagnostics.accessDeniedHints.append("\(browser.rawValue) Safe Storage denied in Keychain.")
             }
+            log("\(browser.rawValue) cookie load failed: \(error.localizedDescription)")
+            return nil
+        } catch {
+            log("\(browser.rawValue) cookie load failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func tryFirefox(
+        browser: BrowserDetector.Browser,
+        targetEmail: String,
+        log: @escaping (String) -> Void,
+        diagnostics: inout ImportDiagnostics) async -> ImportResult?
+    {
+        // Firefox cookies are not encrypted, so no Keychain prompt.
+        do {
+            let firefoxSources = try FirefoxCookieImporter.loadCookiesFromAllProfiles(
+                matchingDomains: ["chatgpt.com", "openai.com"])
+            // Filter sources to match the requested browser
+            let browserName = browser.rawValue
+            for source in firefoxSources where source.label.contains(browserName) {
+                let cookies = FirefoxCookieImporter.makeHTTPCookies(source.records)
+                if cookies.isEmpty {
+                    log("\(browserName) source \(source.label) produced 0 HTTPCookies.")
+                    continue
+                }
+                diagnostics.foundAnyCookies = true
+                log("Loaded \(cookies.count) cookies from \(source.label) (\(self.cookieSummary(cookies)))")
+                let candidate = Candidate(label: source.label, cookies: cookies)
+                if let match = await self.applyCandidate(
+                    candidate,
+                    targetEmail: targetEmail,
+                    log: log,
+                    diagnostics: &diagnostics)
+                {
+                    return match
+                }
+            }
+            return nil
+        } catch let error as FirefoxCookieImporter.ImportError {
             log("\(browser.rawValue) cookie load failed: \(error.localizedDescription)")
             return nil
         } catch {

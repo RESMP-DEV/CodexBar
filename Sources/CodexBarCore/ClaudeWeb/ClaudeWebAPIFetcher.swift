@@ -142,6 +142,18 @@ public enum ClaudeWebAPIFetcher {
                         }
                     }
 
+                case .firefox, .firefoxDeveloperEdition:
+                    let firefoxSources = try FirefoxCookieImporter.loadCookiesFromAllProfiles(
+                        matchingDomains: domains)
+                    for source in firefoxSources where source.label.contains(browser.rawValue) {
+                        if let sessionKey = findSessionKey(in: source.records.map { record in
+                            (name: record.name, value: record.value)
+                        }) {
+                            log("Found sessionKey in \(source.label)")
+                            return sessionKey
+                        }
+                    }
+
                 default:
                     continue
                 }

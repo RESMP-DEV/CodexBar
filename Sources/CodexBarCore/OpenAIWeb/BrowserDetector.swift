@@ -1,5 +1,8 @@
 import Foundation
-import UniformTypeIdentifiers
+
+#if os(macOS)
+import ApplicationServices
+#endif
 
 /// Detects and prioritizes web browsers for cookie extraction.
 ///
@@ -16,6 +19,7 @@ enum BrowserDetector {
         case vivaldi = "Vivaldi"
         case arc = "Arc"
         case firefox = "Firefox"
+        case firefoxDeveloperEdition = "Firefox Developer Edition"
 
         var bundleIdentifier: String {
             switch self {
@@ -26,15 +30,16 @@ enum BrowserDetector {
             case .vivaldi: return "com.vivaldi.Vivaldi"
             case .arc: return "company.thebrowser.Browser"
             case .firefox: return "org.mozilla.firefox"
+            case .firefoxDeveloperEdition: return "org.mozilla.firefoxdeveloperedition"
             }
         }
 
         var supportsCookieExtraction: Bool {
-            // Currently we only support Safari and Chromium-based browsers
+            // Support Safari, Chromium-based browsers, and Firefox
             switch self {
-            case .safari, .chrome, .brave, .edge, .vivaldi:
+            case .safari, .chrome, .brave, .edge, .vivaldi, .firefox, .firefoxDeveloperEdition:
                 return true
-            case .arc, .firefox:
+            case .arc:
                 return false
             }
         }
@@ -82,7 +87,9 @@ enum BrowserDetector {
                 (hasCookies, cookieAge) = self.checkSafariCookies(domains: domains)
             case .chrome, .brave, .edge, .vivaldi:
                 (hasCookies, cookieAge) = self.checkChromiumCookies(browser: browser, domains: domains)
-            case .arc, .firefox:
+            case .firefox, .firefoxDeveloperEdition:
+                (hasCookies, cookieAge) = self.checkFirefoxCookies(browser: browser, domains: domains)
+            case .arc:
                 (hasCookies, cookieAge) = (false, nil)
             }
 
@@ -178,6 +185,62 @@ enum BrowserDetector {
         let profileNames = ["Default", "Profile 1", "Profile 2", "Profile 3"]
         return profileNames.map { profile in
             "\(appSupportBase)/\(browserDir)/\(profile)/Cookies"
+        }
+    }
+
+    /// Checks if Firefox has cookies for the given domains and returns recency.
+    private static func checkFirefoxCookies(browser: Browser, domains: [String]) -> (hasCookies: Bool, age: TimeInterval?) {
+        let paths = self.firefoxCookiePaths(browser: browser)
+        for path in paths {
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let modDate = attrs[.modificationDate] as? Date
+            else {
+                continue
+            }
+            let age = Date().timeIntervalSince(modDate)
+            // Check if file is not too old (within last 90 days)
+            if age < 90 * 24 * 3600 {
+                return (true, age)
+            }
+        }
+        return (false, nil)
+    }
+
+    private static func firefoxCookiePaths(browser: Browser) -> [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let firefoxBase: String
+        
+        switch browser {
+        case .firefox:
+            firefoxBase = "\(home)/Library/Application Support/Firefox"
+        case .firefoxDeveloperEdition:
+            firefoxBase = "\(home)/Library/Application Support/Firefox Developer Edition"
+        default:
+            return []
+        }
+        
+        // Firefox uses profile directories with random names like "abc123.default" or "xyz789.dev-edition-default"
+        // We need to search for profiles and find their cookies.sqlite files
+        guard let profilesDir = URL(string: "file://\(firefoxBase)/Profiles"),
+              let entries = try? FileManager.default.contentsOfDirectory(
+                  at: profilesDir,
+                  includingPropertiesForKeys: [.isDirectoryKey],
+                  options: [.skipsHiddenFiles])
+        else {
+            return []
+        }
+        
+        return entries.compactMap { profileURL -> String? in
+            guard let isDir = (try? profileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory),
+                  isDir else {
+                return nil
+            }
+            let cookiesFile = profileURL.appendingPathComponent("cookies.sqlite").path
+            guard FileManager.default.fileExists(atPath: cookiesFile) else {
+                return nil
+            }
+            return cookiesFile
         }
     }
 }
