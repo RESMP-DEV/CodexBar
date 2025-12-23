@@ -145,12 +145,12 @@ enum ChromeCookieImporter {
         }
         defer { sqlite3_close(db) }
 
-        // Build WHERE clause dynamically for the given domains
-        let conditions = matchingDomains.map { "host_key LIKE '%\($0)%'" }.joined(separator: " OR ")
+        // Build WHERE clause with placeholders for parameterized query
+        let placeholders = matchingDomains.map { _ in "host_key LIKE ?" }.joined(separator: " OR ")
         let sql = """
         SELECT host_key, name, path, expires_utc, is_secure, is_httponly, value, encrypted_value
         FROM cookies
-        WHERE \(conditions)
+        WHERE \(placeholders)
         """
 
         var stmt: OpaquePointer?
@@ -158,6 +158,14 @@ enum ChromeCookieImporter {
             throw ImportError.sqliteFailed(message: String(cString: sqlite3_errmsg(db)))
         }
         defer { sqlite3_finalize(stmt) }
+
+        // Bind parameters for each domain (SQLite uses 1-based indexing)
+        for (index, domain) in matchingDomains.enumerated() {
+            let pattern = "%\(domain)%"
+            if sqlite3_bind_text(stmt, Int32(index + 1), pattern, -1, nil) != SQLITE_OK {
+                throw ImportError.sqliteFailed(message: "Failed to bind parameter")
+            }
+        }
 
         var out: [CookieRecord] = []
         while sqlite3_step(stmt) == SQLITE_ROW {

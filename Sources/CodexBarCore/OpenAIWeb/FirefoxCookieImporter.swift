@@ -139,12 +139,12 @@ enum FirefoxCookieImporter {
         }
         defer { sqlite3_close(db) }
 
-        // Build WHERE clause for matching domains
-        let conditions = matchingDomains.map { "host LIKE '%\($0)%'" }.joined(separator: " OR ")
+        // Build WHERE clause with placeholders for parameterized query
+        let placeholders = matchingDomains.enumerated().map { "host LIKE ?" }.joined(separator: " OR ")
         let sql = """
         SELECT host, name, path, value, expiry, isSecure, isHttpOnly
         FROM moz_cookies
-        WHERE \(conditions)
+        WHERE \(placeholders)
         """
 
         var stmt: OpaquePointer?
@@ -152,6 +152,14 @@ enum FirefoxCookieImporter {
             throw ImportError.sqliteFailed(message: String(cString: sqlite3_errmsg(db)))
         }
         defer { sqlite3_finalize(stmt) }
+
+        // Bind parameters for each domain (SQLite uses 1-based indexing)
+        for (index, domain) in matchingDomains.enumerated() {
+            let pattern = "%\(domain)%"
+            if sqlite3_bind_text(stmt, Int32(index + 1), pattern, -1, nil) != SQLITE_OK {
+                throw ImportError.sqliteFailed(message: "Failed to bind parameter")
+            }
+        }
 
         var out: [CookieRecord] = []
         while sqlite3_step(stmt) == SQLITE_ROW {

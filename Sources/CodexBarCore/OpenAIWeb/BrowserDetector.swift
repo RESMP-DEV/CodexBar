@@ -52,21 +52,31 @@ enum BrowserDetector {
         let cookieAge: TimeInterval?
 
         static func < (lhs: BrowserPriority, rhs: BrowserPriority) -> Bool {
-            // Default browser with cookies wins
+            // We want higher priority items to compare as "greater than" lower priority ones,
+            // since we reverse the sorted array later. So this implements "less than" = "lower priority".
+            
+            // Default browser with cookies has highest priority
             if lhs.isDefault != rhs.isDefault {
-                return lhs.isDefault && lhs.hasCookies
+                // If lhs is default with cookies, it has higher priority, so return false (not less than)
+                // If rhs is default with cookies, it has higher priority, so return true (less than)
+                if lhs.isDefault && lhs.hasCookies { return false }
+                if rhs.isDefault && rhs.hasCookies { return true }
+                // If one is default but doesn't have cookies, fall through to next check
             }
-            // Both default or both non-default: prefer one with cookies
+            
+            // Prefer browsers with cookies over those without
             if lhs.hasCookies != rhs.hasCookies {
-                return lhs.hasCookies
+                return rhs.hasCookies // lhs is less than rhs if rhs has cookies and lhs doesn't
             }
-            // Both have cookies: prefer more recent
+            
+            // Both have cookies: prefer more recent (smaller age = more recent = higher priority)
             if let lAge = lhs.cookieAge, let rAge = rhs.cookieAge {
-                return lAge < rAge // smaller age = more recent
+                return lAge > rAge // lhs is less than rhs if lhs is older
             }
+            
             // Fallback: prefer Safari (no Keychain prompt)
-            if lhs.browser == .safari { return true }
-            if rhs.browser == .safari { return false }
+            if lhs.browser == .safari { return false } // Safari has higher priority
+            if rhs.browser == .safari { return true }  // Safari has higher priority
             return false
         }
     }
@@ -208,25 +218,29 @@ enum BrowserDetector {
     }
 
     private static func firefoxCookiePaths(browser: Browser) -> [String] {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let firefoxBase: String
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let firefoxBase: URL
         
         switch browser {
         case .firefox:
-            firefoxBase = "\(home)/Library/Application Support/Firefox"
+            firefoxBase = home.appendingPathComponent("Library")
+                .appendingPathComponent("Application Support")
+                .appendingPathComponent("Firefox")
         case .firefoxDeveloperEdition:
-            firefoxBase = "\(home)/Library/Application Support/Firefox Developer Edition"
+            firefoxBase = home.appendingPathComponent("Library")
+                .appendingPathComponent("Application Support")
+                .appendingPathComponent("Firefox Developer Edition")
         default:
             return []
         }
         
         // Firefox uses profile directories with random names like "abc123.default" or "xyz789.dev-edition-default"
         // We need to search for profiles and find their cookies.sqlite files
-        guard let profilesDir = URL(string: "file://\(firefoxBase)/Profiles"),
-              let entries = try? FileManager.default.contentsOfDirectory(
-                  at: profilesDir,
-                  includingPropertiesForKeys: [.isDirectoryKey],
-                  options: [.skipsHiddenFiles])
+        let profilesDir = firefoxBase.appendingPathComponent("Profiles")
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: profilesDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles])
         else {
             return []
         }
